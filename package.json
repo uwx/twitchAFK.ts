@@ -1,0 +1,30 @@
+{
+  "name": "twitchAFK",
+  "version": "1.0.0",
+  "description": "![Flashy banner, yo](img/banner.gif)",
+  "main": "twitchAFK.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sleepydragn1/twitchAFK.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Sleepydragn1/twitchAFK/issues"
+  },
+  "homepage": "https://github.com/Sleepydragn1/twitchAFK#readme",
+  "dependencies": {
+    "@types/jquery": "^3.3.35",
+    "@types/node": "^13.13.2",
+    "@types/puppeteer-core": "^2.0.0",
+    "chalk": "^4.0.0",
+    "puppeteer-core": "^3.0.1",
+    "puppeteer-extra": "^3.1.9",
+    "require-extension-hooks": "^0.3.3",
+    "require-extension-hooks-typescript": "^0.1.0"
+  }
+}
