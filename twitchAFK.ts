@@ -272,7 +272,6 @@ async function twitchLogin(): Promise<boolean> {
 
     await asyncTimeout(5000);
 
-    page.mainFrame().$
     await repeatEvalUntilTrue(() => $('[autocomplete=username]').is(':visible'), 15000);
 
     await page.focus('[autocomplete=username]');
