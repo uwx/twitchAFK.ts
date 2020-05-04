@@ -1,8 +1,13 @@
 import { readFileSync, writeFileSync, existsSync, promises } from 'fs';
 const { readFile, writeFile } = promises;
 import { argv } from 'process';
+import * as path from 'path';
+
 import * as chalk from 'chalk';
-import * as puppeteer from 'puppeteer-core';
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin = require('puppeteer-extra-plugin-stealth');
+
+puppeteer.use(StealthPlugin());
 
 const args = argv.slice(3);
 
@@ -155,7 +160,7 @@ for (const key of Object.keys(defaultConfig)) {
 // Convert channel name into proper Twitch URL
 const streamURL = 'https://twitch.tv/' + config.channel;
 
-let page: puppeteer.Page;
+let page: import('puppeteer').Page;
 
 function listenPrintJSConsole() {
     page.on('console', message => {
@@ -233,82 +238,84 @@ function asyncTimeout(time: number, handleArr: NodeJS.Timeout[] = []): Promise<a
     return new Promise(resolve => handleArr[0] = setTimeout(resolve, time));
 }
 
-async function twitchLogin() {
-    // Wait for Twitch to finish logging in...
-    async function finalizeLogin(loginTimeout = 60000) {
-        await repeatUntilTrue(async () => !!(await page.cookies()).filter(cookie => cookie.name.includes('login')).length, loginTimeout);
+async function isLoggedIn(): Promise<boolean> {
+    return !!(await page.cookies()).filter(cookie => cookie.name.includes('login')).length;
+}
 
-        // Give it a little extra time, just in case the cookie isn't quite in line with the login
-        await asyncTimeout(1000);
-
-        log('Logged into Twitch!');
-        return 'Successfully logged in!';
+async function twitchLogin(): Promise<boolean> {
+    // Is the user already logged in via Chrome's profile system? If so, skip past the login.
+    if (await isLoggedIn()) {
+        log(`You're already logged in to Twitch. Good on you.`);
+        return;
     }
 
     while (true) {
         const status = await page.goto('https://www.twitch.tv', {waitUntil: 'networkidle2'});
         if (!status.ok()) {
-            log(`The Twitch homepage failed to load (${status.statusText()}), retrying in 15s...`);
+            log(`The Twitch homepage failed to load (${status.status()} ${status.statusText()}), retrying in 15s...`);
             await asyncTimeout(15000);
             continue;
         }
+        break;
+    }
 
-        mutePage();
+    await mutePage();
 
-        // Is the user already logged in via slimer's profile system? If so, skip past the login.
-        if ((await page.cookies()).filter(cookie => cookie.name.includes('login')).length) {
-            log(`You're already logged in to Twitch. Good on you.`);
+    log('Logging into Twitch...');
 
-            return true;
-        } else {
-            log('Logging into Twitch...');
+    let extendedTimeout = false;
 
-            // Inject jQuery for maximum crutch
-            await page.evaluate(await readFile('jquery-3.3.1.min.js', 'utf8'));
+    // Inject jQuery for maximum crutch
+    await page.evaluate(await readFile('jquery-3.3.1.min.js', 'utf8'));
 
-            await page.click('[data-a-target="login-button"]');
+    await page.click('[data-a-target="login-button"]');
 
-            await asyncTimeout(5000);
+    await asyncTimeout(5000);
 
-            await repeatUntilTrue(() => page.evaluate(() => $('[autocomplete=username]').is(':visible')), 15000);
+    page.mainFrame().$
+    await repeatEvalUntilTrue(() => $('[autocomplete=username]').is(':visible'), 15000);
 
-            await page.focus('[autocomplete=username]');
-            await page.keyboard.type(config.username);
+    await page.focus('[autocomplete=username]');
+    await page.keyboard.type(config.username);
 
-            await page.focus('[autocomplete=current-password]');
-            await page.keyboard.type(config.password);
+    await page.focus('[autocomplete=current-password]');
+    await page.keyboard.type(config.password);
 
-            await page.click('[data-a-target=passport-login-button]');
+    await page.click('[data-a-target=passport-login-button]');
 
-            try {
-                if (config.furtherAuthDetection) {
-                    // If furtherAuthDetection is enabled, we check for the login window to remain visible
-                    // If not, just check for the login cookie like normal
-                    // I honestly can't think of an edge case where you wouldn't want it enabled, but who knows?
+    try {
+        if (config.furtherAuthDetection) {
+            // If furtherAuthDetection is enabled, we check for the login window to remain visible
+            // If not, just check for the login cookie like normal
+            // I honestly can't think of an edge case where you wouldn't want it enabled, but who knows?
 
-                    if (await page.evaluate(() => $('[data-a-target="passport-modal"]').is(':visible'))) {
-                        info('Further auth necessary. If this requires browser input, please run with the `headless` option set to `false`.')
+            if (await page.evaluate(() => $('[data-a-target="passport-modal"]').is(':visible'))) {
+                info('Further auth necessary. If this requires browser input, please run with the `headless` option set to `false`.')
+            }
+
+            if (config.furtherAuthTimeout === -1) {
+                while (true) {
+                    if (await page.evaluate(() => !$('[data-a-target="passport-modal"]').is(':visible'))) {
+                        break;
                     }
-
-                    if (config.furtherAuthTimeout === -1) {
-                        while (true) {
-                            if (await page.evaluate(() => !$('[data-a-target="passport-modal"]').is(':visible'))) {
-                                break;
-                            }
-                            await asyncTimeout(250);
-                        }
-                    } else {
-                        await repeatUntilTrue(() => page.evaluate(() => !$('[data-a-target="passport-modal"]').is(':visible')), 30000);
-                    }
+                    await asyncTimeout(250);
                 }
-
-                return await finalizeLogin();
-            } catch (ex) {
-                log('Further authentication required. Waiting 10 minutes for user input...');
-                return await finalizeLogin(600000);
+            } else {
+                await repeatEvalUntilTrue(() => !$('[data-a-target="passport-modal"]').is(':visible'), 30000);
             }
         }
+    } catch (ex) {
+        log('Further authentication required. Waiting 10 minutes for user input...');
+        extendedTimeout = true;
     }
+
+    // Wait for Twitch to finish logging in...
+    await repeatUntilTrue(async () => await isLoggedIn(), extendedTimeout ? 600_000 : 60_000);
+
+    // Give it a little extra time, just in case the cookie isn't quite in line with the login
+    await asyncTimeout(1000);
+
+    log('Logged into Twitch!');
 }
 
 async function acceptMatureWarning() {
@@ -326,7 +333,7 @@ async function acceptMatureWarning() {
 }
 
 async function setAppropriateMuteStatus() {
-    await repeatUntilTrue(() => page.evaluate(() => $('[data-a-target="player-mute-unmute-button"]').is(':visible')), 15000);
+    await repeatEvalUntilTrue(() => $('[data-a-target="player-mute-unmute-button"]').is(':visible'), 15000);
 
     if (!config.streamAudio) {
         await page.evaluate(() => {
@@ -586,7 +593,11 @@ async function repeatUntilTrue(condition: string | (() => boolean | Promise<bool
         log('Critical timeout, twitchAFK is exiting.');
         process.exit(1);
     }
-};
+}
+
+async function repeatEvalUntilTrue(condition: () => boolean, timeOutMillis: number = 44445) {
+    await repeatUntilTrue(() => page.evaluate(condition), timeOutMillis);
+}
 
 // Mute any video on the page.
 async function mutePage() {
@@ -608,6 +619,18 @@ function randomRate(min: number, max: number) {
     return Math.floor((min + ((max - min) * Math.random())) * 60000);
 }
 
+const requestBlacklist = [
+    //'static-cdn.jtvnw.net/badges',
+    //'static-cdn.jtvnw.net/jtv_user_pictures/',
+    //'web-cdn.ttvnw.net/images/xarth/bg_glitch_pattern.png',
+    ///*'service-worker.js',
+    //'serviceworker.js',*/
+    //'static.twitchcdn.net/assets/Roobert-',
+    //'static.twitchcdn.net/assets/gift',
+    //'static-cdn.jtvnw.net/user-default-pictures/',
+    //'static-cdn.jtvnw.net/emoticons/'
+];
+
 (async () => {
     const browser = await puppeteer.launch({
         executablePath: `C:\\SSDPrograms\\chrlauncher\\ungoogled-chromium_80.0.3987.149-2.1_windows\\chrome.exe`,
@@ -619,9 +642,35 @@ function randomRate(min: number, max: number) {
         },
 
         headless: config.headless,
+
+        userDataDir: path.join(__dirname, 'Chrome User Data'),
+
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--disable-gpu',
+        ]
     });
 
     page = await browser.newPage();
+
+    /*await page.setRequestInterception(true);
+    page.on('request', request => {
+        try {
+            const reqUrl = request.url();
+            for (const blacklistItem of requestBlacklist) {
+                if (reqUrl.includes(blacklistItem)) {
+                    request.abort();
+                    return;
+                }
+            }
+            request.continue();
+        } catch (err) {
+            warn('Already handled:', request.url(), (''+err).slice(0, (''+err).indexOf('\n')));
+        }
+    });*/
 
     await page.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.108 Safari/537.36');
 
